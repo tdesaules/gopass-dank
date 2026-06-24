@@ -46,6 +46,7 @@ Item {
         if (cached && cached.length > 0)
             secrets = cached
         lastSync = pluginService.loadPluginState("gopassDank", "lastSync", 0)
+        lastRefresh = pluginService.loadPluginState("gopassDank", "lastRefresh", 0)
 
         refreshSecrets()
     }
@@ -53,6 +54,30 @@ Item {
     onTriggerChanged: {
         if (pluginService)
             pluginService.savePluginData("gopassDank", "trigger", trigger)
+    }
+
+    onAutoRefreshChanged: {
+        if (autoRefresh)
+            refreshTimer.restart()
+        else
+            refreshTimer.stop()
+    }
+
+    onRefreshIntervalSecChanged: refreshTimer.restart()
+
+    // Background refresh timer: keeps the secret cache fresh while the
+    // plugin is loaded, regardless of whether the launcher is open.
+    Timer {
+        id: refreshTimer
+        interval: Math.max(1, root.refreshIntervalSec) * 1000
+        repeat: true
+        running: root.autoRefresh
+        triggeredOnStart: false
+
+        onTriggered: {
+            if (!root.loading)
+                root.refreshSecrets()
+        }
     }
 
     function _requestUpdate() {
@@ -163,8 +188,10 @@ Item {
                 if (exitCode === 0) {
                     root.secrets = lines.slice()
                     root.lastRefresh = Date.now()
-                    if (root.pluginService)
+                    if (root.pluginService) {
                         root.pluginService.savePluginState("gopassDank", "secrets", root.secrets)
+                        root.pluginService.savePluginState("gopassDank", "lastRefresh", root.lastRefresh)
+                    }
                 } else {
                     if (root.secrets.length === 0)
                         root.errorMessage = root.errorMessage || ("gopass exited with code " + exitCode)
@@ -185,8 +212,8 @@ Item {
                     && (lastSync === 0 || (now - lastSync) > syncIntervalSec * 1000)) {
                 syncAndRefresh()
             } else if (secrets.length === 0
-                       || (autoRefresh && lastRefresh > 0
-                           && (now - lastRefresh) > refreshIntervalSec * 1000)) {
+                       || (autoRefresh && (lastRefresh === 0
+                           || (now - lastRefresh) > refreshIntervalSec * 1000))) {
                 refreshSecrets()
             }
         }
