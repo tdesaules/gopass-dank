@@ -3,11 +3,10 @@ import Quickshell
 import Quickshell.Io
 import qs.Services
 
-Item {
+QtObject {
     id: root
 
     property var pluginService: null
-    property string pluginId: "gopassDank"
     property string trigger: "pass"
 
     signal itemsChanged
@@ -15,18 +14,11 @@ Item {
     // Cached secret paths from gopass list --flat
     property var secrets: []
     property bool loading: false
-    property bool syncing: false
     property string errorMessage: ""
-    property double lastRefresh: 0
-    property double lastSync: 0
 
     // Settings (loaded from plugin data)
     property string gopassBinary: "gopass"
     property int maxResults: 50
-    property bool autoRefresh: true
-    property int refreshIntervalSec: 300
-    property bool syncOnActivation: true
-    property int syncIntervalSec: 60
 
     Component.onCompleted: {
         console.info("GopassDank: Plugin loaded")
@@ -37,16 +29,10 @@ Item {
         trigger = pluginService.loadPluginData("gopassDank", "trigger", "pass")
         gopassBinary = pluginService.loadPluginData("gopassDank", "gopassBinary", "gopass")
         maxResults = pluginService.loadPluginData("gopassDank", "maxResults", 50)
-        autoRefresh = pluginService.loadPluginData("gopassDank", "autoRefresh", true)
-        refreshIntervalSec = pluginService.loadPluginData("gopassDank", "refreshIntervalSec", 300)
-        syncOnActivation = pluginService.loadPluginData("gopassDank", "syncOnActivation", true)
-        syncIntervalSec = pluginService.loadPluginData("gopassDank", "syncIntervalSec", 60)
 
         var cached = pluginService.loadPluginState("gopassDank", "secrets", [])
         if (cached && cached.length > 0)
             secrets = cached
-        lastSync = pluginService.loadPluginState("gopassDank", "lastSync", 0)
-        lastRefresh = pluginService.loadPluginState("gopassDank", "lastRefresh", 0)
 
         refreshSecrets()
     }
@@ -56,35 +42,11 @@ Item {
             pluginService.savePluginData("gopassDank", "trigger", trigger)
     }
 
-    onAutoRefreshChanged: {
-        if (autoRefresh)
-            refreshTimer.restart()
-        else
-            refreshTimer.stop()
-    }
-
-    onRefreshIntervalSecChanged: refreshTimer.restart()
-
-    // Background refresh timer: keeps the secret cache fresh while the
-    // plugin is loaded, regardless of whether the launcher is open.
-    Timer {
-        id: refreshTimer
-        interval: Math.max(1, root.refreshIntervalSec) * 1000
-        repeat: true
-        running: root.autoRefresh
-        triggeredOnStart: false
-
-        onTriggered: {
-            if (!root.loading)
-                root.refreshSecrets()
-        }
-    }
-
     function _requestUpdate() {
-        if (!pluginService || !pluginId)
+        if (!pluginService)
             return
         if (typeof pluginService.requestLauncherUpdate === "function")
-            pluginService.requestLauncherUpdate(pluginId)
+            pluginService.requestLauncherUpdate("gopassDank")
         else
             console.warn("GopassDank: requestLauncherUpdate not available")
     }
@@ -99,68 +61,9 @@ Item {
         }
 
         loading = true
-        syncing = false
         errorMessage = ""
         var proc = listProcessComponent.createObject(root)
         proc.running = true
-    }
-
-    function syncAndRefresh() {
-        if (loading)
-            return
-        if (!gopassBinary || gopassBinary.length === 0) {
-            errorMessage = "Gopass binary path is not configured"
-            _requestUpdate()
-            return
-        }
-
-        loading = true
-        syncing = true
-        errorMessage = ""
-        var proc = syncProcessComponent.createObject(root)
-        proc.running = true
-    }
-
-    Component {
-        id: syncProcessComponent
-
-        Process {
-            command: [root.gopassBinary, "sync"]
-            property var syncMessages: []
-
-            stdout: SplitParser {
-                onRead: line => {
-                    if (line && line.trim().length > 0)
-                        syncMessages.push(line.trim())
-                }
-            }
-
-            stderr: SplitParser {
-                onRead: line => {
-                    if (line && line.trim().length > 0)
-                        syncMessages.push(line.trim())
-                }
-            }
-
-            onExited: (exitCode) => {
-                root.lastSync = Date.now()
-                if (root.pluginService)
-                    root.pluginService.savePluginState("gopassDank", "lastSync", root.lastSync)
-
-                if (exitCode !== 0)
-                    root._showToast("Sync failed, using local cache")
-                else if (syncMessages.length > 0)
-                    root._showToast("Vault synced")
-
-                root.syncing = false
-                root._requestUpdate()
-
-                var listProc = root.listProcessComponent.createObject(root)
-                listProc.running = true
-
-                destroy()
-            }
-        }
     }
 
     Component {
@@ -187,11 +90,8 @@ Item {
             onExited: (exitCode) => {
                 if (exitCode === 0) {
                     root.secrets = lines.slice()
-                    root.lastRefresh = Date.now()
-                    if (root.pluginService) {
+                    if (root.pluginService)
                         root.pluginService.savePluginState("gopassDank", "secrets", root.secrets)
-                        root.pluginService.savePluginState("gopassDank", "lastRefresh", root.lastRefresh)
-                    }
                 } else {
                     if (root.secrets.length === 0)
                         root.errorMessage = root.errorMessage || ("gopass exited with code " + exitCode)
@@ -204,28 +104,14 @@ Item {
     }
 
     function getItems(query) {
-        var now = Date.now()
-        var isEmpty = !query || query.trim().length === 0
-
-        if (!loading) {
-            if (isEmpty && syncOnActivation
-                    && (lastSync === 0 || (now - lastSync) > syncIntervalSec * 1000)) {
-                syncAndRefresh()
-            } else if (secrets.length === 0
-                       || (autoRefresh && (lastRefresh === 0
-                           || (now - lastRefresh) > refreshIntervalSec * 1000))) {
-                refreshSecrets()
-            }
-        }
-
         var items = []
+        var isEmpty = !query || query.trim().length === 0
 
         if (loading && secrets.length === 0) {
             items.push({
-                name: syncing ? "Syncing gopass vault..." : "Loading gopass vault...",
+                name: "Loading gopass vault...",
                 icon: "material:hourglass_empty",
-                comment: syncing ? "Syncing with git, then fetching secrets"
-                                 : "Fetching secret list from gopass",
+                comment: "Fetching secret list from gopass",
                 action: "noop:",
                 categories: ["Gopass"],
                 _preScored: 9999
@@ -245,7 +131,7 @@ Item {
             items.push({
                 name: "Retry",
                 icon: "material:refresh",
-                comment: "Attempt to sync and load secrets again",
+                comment: "Attempt to load secrets again",
                 action: "retry:",
                 categories: ["Gopass"]
             })
@@ -306,14 +192,12 @@ Item {
     function _makeRefreshItem() {
         var name, comment, action
         if (loading) {
-            name = syncing ? "Syncing vault..." : "Refreshing vault..."
-            comment = syncing ? "Pulling latest entries from git"
-                              : "Fetching secret list from gopass"
+            name = "Refreshing vault..."
+            comment = "Fetching secret list from gopass"
             action = "noop:"
         } else {
             name = "Refresh vault"
-            comment = secrets.length + " secrets"
-                    + (lastSync > 0 ? " \u00b7 synced " + _formatAge(lastSync) : "")
+            comment = secrets.length + " secrets \u00b7 click to reload from gopass"
             action = "refresh:"
         }
         return {
@@ -352,10 +236,10 @@ Item {
             _copySecret(actionData)
             break
         case "refresh":
-            syncAndRefresh()
+            refreshSecrets()
             break
         case "retry":
-            syncAndRefresh()
+            refreshSecrets()
             break
         case "noop":
             break
@@ -374,21 +258,5 @@ Item {
             ToastService.showInfo("Gopass-Dank", message)
         else
             console.log("GopassDank:", message)
-    }
-
-    function _formatAge(timestamp) {
-        if (!timestamp)
-            return ""
-        var seconds = Math.floor((Date.now() - timestamp) / 1000)
-        if (seconds < 60)
-            return "just now"
-        var minutes = Math.floor(seconds / 60)
-        if (minutes < 60)
-            return minutes + "m ago"
-        var hours = Math.floor(minutes / 60)
-        if (hours < 24)
-            return hours + "h ago"
-        var days = Math.floor(hours / 24)
-        return days + "d ago"
     }
 }

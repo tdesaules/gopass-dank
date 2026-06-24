@@ -48,38 +48,4 @@ PluginSettings {
         maximum: 200
         unit: ""
     }
-
-    ToggleSetting {
-        settingKey: "autoRefresh"
-        label: "Auto Refresh"
-        description: "Periodically refresh the secret list in the background when the launcher opens"
-        defaultValue: true
-    }
-
-    SliderSetting {
-        settingKey: "refreshIntervalSec"
-        label: "Refresh Interval"
-        description: "How often to refresh the vault cache when auto-refresh is enabled"
-        defaultValue: 300
-        minimum: 60
-        maximum: 3600
-        unit: "s"
-    }
-
-    ToggleSetting {
-        settingKey: "syncOnActivation"
-        label: "Sync on Activation"
-        description: "Automatically run gopass sync (git pull) when the plugin is activated in the launcher"
-        defaultValue: true
-    }
-
-    SliderSetting {
-        settingKey: "syncIntervalSec"
-        label: "Sync Interval"
-        description: "Minimum time between automatic git syncs when the launcher opens"
-        defaultValue: 60
-        minimum: 10
-        maximum: 3600
-        unit: "s"
-    }
 }
