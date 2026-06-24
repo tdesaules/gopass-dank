@@ -120,6 +120,9 @@ Item {
                     root._showToast("Vault synced")
 
                 root.syncing = false
+                root.itemsChanged()
+                if (root.pluginService)
+                    root.pluginService.requestLauncherUpdate("gopassDank")
 
                 // Proceed to list secrets regardless of sync result
                 var listProc = root.listProcessComponent.createObject(root)
@@ -163,6 +166,8 @@ Item {
                 }
                 root.loading = false
                 root.itemsChanged()
+                if (root.pluginService)
+                    root.pluginService.requestLauncherUpdate("gopassDank")
                 destroy()
             }
         }
