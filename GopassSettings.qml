@@ -65,4 +65,21 @@ PluginSettings {
         maximum: 3600
         unit: "s"
     }
+
+    ToggleSetting {
+        settingKey: "syncOnActivation"
+        label: "Sync on Activation"
+        description: "Automatically run gopass sync (git pull) when the plugin is activated in the launcher"
+        defaultValue: true
+    }
+
+    SliderSetting {
+        settingKey: "syncIntervalSec"
+        label: "Sync Interval"
+        description: "Minimum time between automatic git syncs when the launcher opens"
+        defaultValue: 60
+        minimum: 10
+        maximum: 3600
+        unit: "s"
+    }
 }

@@ -14,14 +14,18 @@ Item {
     // Cached secret paths from gopass list --flat
     property var secrets: []
     property bool loading: false
+    property bool syncing: false
     property string errorMessage: ""
     property double lastRefresh: 0
+    property double lastSync: 0
 
     // Settings (loaded from plugin data)
     property string gopassBinary: "gopass"
     property int maxResults: 50
     property bool autoRefresh: true
     property int refreshIntervalSec: 300
+    property bool syncOnActivation: true
+    property int syncIntervalSec: 60
 
     Component.onCompleted: {
         console.info("GopassDank: Plugin loaded")
@@ -34,12 +38,16 @@ Item {
         maxResults = pluginService.loadPluginData("gopassDank", "maxResults", 50)
         autoRefresh = pluginService.loadPluginData("gopassDank", "autoRefresh", true)
         refreshIntervalSec = pluginService.loadPluginData("gopassDank", "refreshIntervalSec", 300)
+        syncOnActivation = pluginService.loadPluginData("gopassDank", "syncOnActivation", true)
+        syncIntervalSec = pluginService.loadPluginData("gopassDank", "syncIntervalSec", 60)
 
-        // Load cached secrets from state for instant display before async refresh
+        // Load cached secrets and last sync from state for instant display
         var cached = pluginService.loadPluginState("gopassDank", "secrets", [])
         if (cached && cached.length > 0)
             secrets = cached
+        lastSync = pluginService.loadPluginState("gopassDank", "lastSync", 0)
 
+        // Quick local list to pick up changes since last cache (no git sync)
         refreshSecrets()
     }
 
@@ -58,9 +66,68 @@ Item {
         }
 
         loading = true
+        syncing = false
         errorMessage = ""
         var proc = listProcessComponent.createObject(root)
         proc.running = true
+    }
+
+    function syncAndRefresh() {
+        if (loading)
+            return
+        if (!gopassBinary || gopassBinary.length === 0) {
+            errorMessage = "Gopass binary path is not configured"
+            itemsChanged()
+            return
+        }
+
+        loading = true
+        syncing = true
+        errorMessage = ""
+        var proc = syncProcessComponent.createObject(root)
+        proc.running = true
+    }
+
+    Component {
+        id: syncProcessComponent
+
+        Process {
+            command: [root.gopassBinary, "sync"]
+            property var syncMessages: []
+
+            stdout: SplitParser {
+                onRead: line => {
+                    if (line && line.trim().length > 0)
+                        syncMessages.push(line.trim())
+                }
+            }
+
+            stderr: SplitParser {
+                onRead: line => {
+                    if (line && line.trim().length > 0)
+                        syncMessages.push(line.trim())
+                }
+            }
+
+            onExited: (exitCode) => {
+                root.lastSync = Date.now()
+                if (root.pluginService)
+                    root.pluginService.savePluginState("gopassDank", "lastSync", root.lastSync)
+
+                if (exitCode !== 0)
+                    root._showToast("Sync failed, using local cache")
+                else if (syncMessages.length > 0)
+                    root._showToast("Vault synced")
+
+                root.syncing = false
+
+                // Proceed to list secrets regardless of sync result
+                var listProc = root.listProcessComponent.createObject(root)
+                listProc.running = true
+
+                destroy()
+            }
+        }
     }
 
     Component {
@@ -103,13 +170,18 @@ Item {
 
     function getItems(query) {
         var now = Date.now()
+        var isEmpty = !query || query.trim().length === 0
 
-        // Trigger a background refresh if cache is empty or stale
-        if (secrets.length === 0 && !loading) {
-            refreshSecrets()
-        } else if (autoRefresh && !loading && lastRefresh > 0
-                   && (now - lastRefresh) > refreshIntervalSec * 1000) {
-            refreshSecrets()
+        // On activation (empty query): sync+refresh automatically if stale
+        if (!loading) {
+            if (isEmpty && syncOnActivation
+                    && (lastSync === 0 || (now - lastSync) > syncIntervalSec * 1000)) {
+                syncAndRefresh()
+            } else if (secrets.length === 0
+                       || (autoRefresh && lastRefresh > 0
+                           && (now - lastRefresh) > refreshIntervalSec * 1000)) {
+                refreshSecrets()
+            }
         }
 
         var items = []
@@ -117,9 +189,10 @@ Item {
         // Loading state with no cached data yet
         if (loading && secrets.length === 0) {
             items.push({
-                name: "Loading gopass vault...",
+                name: syncing ? "Syncing gopass vault..." : "Loading gopass vault...",
                 icon: "material:hourglass_empty",
-                comment: "Fetching secret list from gopass",
+                comment: syncing ? "Syncing with git, then fetching secrets"
+                                 : "Fetching secret list from gopass",
                 action: "noop:",
                 categories: ["Gopass"]
             })
@@ -138,23 +211,26 @@ Item {
             items.push({
                 name: "Retry",
                 icon: "material:refresh",
-                comment: "Attempt to load secrets again",
+                comment: "Attempt to sync and load secrets again",
                 action: "retry:",
                 categories: ["Gopass"]
             })
             return items
         }
 
-        // No query: show refresh action + all secrets up to maxResults
-        if (!query || query.trim().length === 0) {
-            items.push({
-                name: loading ? "Refreshing vault..." : "Refresh vault",
-                icon: "material:sync",
-                comment: secrets.length + " secrets loaded"
-                        + (lastRefresh > 0 ? " \u00b7 updated " + _formatAge(lastRefresh) : ""),
-                action: "refresh:",
-                categories: ["Gopass"]
-            })
+        // No query: show all secrets up to maxResults
+        if (isEmpty) {
+            // Subtle status indicator while syncing/refreshing in the background
+            if (loading) {
+                items.push({
+                    name: syncing ? "Syncing vault..." : "Refreshing vault...",
+                    icon: "material:sync",
+                    comment: syncing ? "Pulling latest entries from git"
+                                     : "Fetching secret list from gopass",
+                    action: "noop:",
+                    categories: ["Gopass"]
+                })
+            }
 
             var shown = Math.min(maxResults, secrets.length)
             for (var i = 0; i < shown; i++)
@@ -230,11 +306,8 @@ Item {
         case "copy":
             _copySecret(actionData)
             break
-        case "refresh":
-            refreshSecrets()
-            break
         case "retry":
-            refreshSecrets()
+            syncAndRefresh()
             break
         case "noop":
             break
