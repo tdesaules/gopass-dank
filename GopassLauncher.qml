@@ -7,6 +7,7 @@ QtObject {
     id: root
 
     property var pluginService: null
+    property string pluginId: "gopassDank"
     property string trigger: "pass"
 
     signal itemsChanged
@@ -14,6 +15,7 @@ QtObject {
     // Cached secret paths from gopass list --flat
     property var secrets: []
     property bool loading: false
+    property bool syncing: false
     property string errorMessage: ""
 
     // Settings (loaded from plugin data)
@@ -26,11 +28,11 @@ QtObject {
         if (!pluginService)
             return
 
-        trigger = pluginService.loadPluginData("gopassDank", "trigger", "pass")
-        gopassBinary = pluginService.loadPluginData("gopassDank", "gopassBinary", "gopass")
-        maxResults = pluginService.loadPluginData("gopassDank", "maxResults", 50)
+        trigger = pluginService.loadPluginData(pluginId, "trigger", "pass")
+        gopassBinary = pluginService.loadPluginData(pluginId, "gopassBinary", "gopass")
+        maxResults = pluginService.loadPluginData(pluginId, "maxResults", 50)
 
-        var cached = pluginService.loadPluginState("gopassDank", "secrets", [])
+        var cached = pluginService.loadPluginState(pluginId, "secrets", [])
         if (cached && cached.length > 0)
             secrets = cached
 
@@ -39,16 +41,7 @@ QtObject {
 
     onTriggerChanged: {
         if (pluginService)
-            pluginService.savePluginData("gopassDank", "trigger", trigger)
-    }
-
-    function _requestUpdate() {
-        if (!pluginService)
-            return
-        if (typeof pluginService.requestLauncherUpdate === "function")
-            pluginService.requestLauncherUpdate("gopassDank")
-        else
-            console.warn("GopassDank: requestLauncherUpdate not available")
+            pluginService.savePluginData(pluginId, "trigger", trigger)
     }
 
     function refreshSecrets() {
@@ -56,19 +49,74 @@ QtObject {
             return
         if (!gopassBinary || gopassBinary.length === 0) {
             errorMessage = "Gopass binary path is not configured"
-            _requestUpdate()
+            root.itemsChanged()
             return
         }
 
         loading = true
+        syncing = false
         errorMessage = ""
         var proc = listProcessComponent.createObject(root)
         proc.running = true
     }
 
-    Component {
-        id: listProcessComponent
+    // Sync git (gopass sync) then refresh the local secret list. Used by the
+    // Refresh vault button so it acts as a "gopass sync" equivalent.
+    function syncAndRefresh() {
+        if (loading)
+            return
+        if (!gopassBinary || gopassBinary.length === 0) {
+            errorMessage = "Gopass binary path is not configured"
+            root.itemsChanged()
+            return
+        }
 
+        loading = true
+        syncing = true
+        errorMessage = ""
+        var proc = syncProcessComponent.createObject(root)
+        proc.running = true
+    }
+
+    property Component syncProcessComponent: Component {
+        Process {
+            command: [root.gopassBinary, "sync"]
+            property var syncMessages: []
+
+            stdout: SplitParser {
+                onRead: line => {
+                    if (line && line.trim().length > 0)
+                        syncMessages.push(line.trim())
+                }
+            }
+
+            stderr: SplitParser {
+                onRead: line => {
+                    if (line && line.trim().length > 0)
+                        syncMessages.push(line.trim())
+                }
+            }
+
+            onExited: (exitCode) => {
+                if (exitCode !== 0)
+                    root._showToast("Sync failed, using local cache")
+                else if (syncMessages.length > 0)
+                    root._showToast("Vault synced")
+
+                root.syncing = false
+                root._requestList()
+                destroy()
+            }
+        }
+    }
+
+    // Launches gopass list --flat to (re)build the local cache.
+    function _requestList() {
+        var proc = listProcessComponent.createObject(root)
+        proc.running = true
+    }
+
+    property Component listProcessComponent: Component {
         Process {
             command: [root.gopassBinary, "list", "--flat"]
             property var lines: []
@@ -91,13 +139,13 @@ QtObject {
                 if (exitCode === 0) {
                     root.secrets = lines.slice()
                     if (root.pluginService)
-                        root.pluginService.savePluginState("gopassDank", "secrets", root.secrets)
+                        root.pluginService.savePluginState(root.pluginId, "secrets", root.secrets)
                 } else {
                     if (root.secrets.length === 0)
                         root.errorMessage = root.errorMessage || ("gopass exited with code " + exitCode)
                 }
                 root.loading = false
-                root._requestUpdate()
+                root.itemsChanged()
                 destroy()
             }
         }
@@ -107,14 +155,18 @@ QtObject {
         var items = []
         var isEmpty = !query || query.trim().length === 0
 
+        // Trigger an initial load if the cache is empty
+        if (secrets.length === 0 && !loading && errorMessage === "")
+            refreshSecrets()
+
         if (loading && secrets.length === 0) {
             items.push({
-                name: "Loading gopass vault...",
+                name: syncing ? "Syncing gopass vault..." : "Loading gopass vault...",
                 icon: "material:hourglass_empty",
-                comment: "Fetching secret list from gopass",
+                comment: syncing ? "Running gopass sync, then fetching secrets"
+                                 : "Fetching secret list from gopass",
                 action: "noop:",
-                categories: ["Gopass"],
-                _preScored: 9999
+                categories: ["Gopass"]
             })
             return items
         }
@@ -125,8 +177,7 @@ QtObject {
                 icon: "material:error",
                 comment: errorMessage,
                 action: "retry:",
-                categories: ["Gopass"],
-                _preScored: 9999
+                categories: ["Gopass"]
             })
             items.push({
                 name: "Retry",
@@ -190,23 +241,21 @@ QtObject {
     }
 
     function _makeRefreshItem() {
-        var name, comment, action
+        var name, comment
         if (loading) {
-            name = "Refreshing vault..."
-            comment = "Fetching secret list from gopass"
-            action = "noop:"
+            name = syncing ? "Syncing vault..." : "Refreshing vault..."
+            comment = syncing ? "Running gopass sync (git pull/push)"
+                              : "Fetching secret list from gopass"
         } else {
-            name = "Refresh vault"
-            comment = secrets.length + " secrets \u00b7 click to reload from gopass"
-            action = "refresh:"
+            name = "sync"
+            comment = secrets.length + " secrets \u00b7 click to sync & reload"
         }
         return {
             name: name,
             icon: "material:sync",
             comment: comment,
-            action: action,
-            categories: ["Gopass"],
-            _preScored: 9999
+            action: loading ? "noop:" : "refresh:",
+            categories: ["Gopass"]
         }
     }
 
@@ -236,10 +285,10 @@ QtObject {
             _copySecret(actionData)
             break
         case "refresh":
-            refreshSecrets()
+            syncAndRefresh()
             break
         case "retry":
-            refreshSecrets()
+            syncAndRefresh()
             break
         case "noop":
             break
@@ -248,9 +297,66 @@ QtObject {
         }
     }
 
+    // Context menu actions (opened with Tab on a selected item).
+    function getContextMenuActions(item) {
+        if (!item || !item.action)
+            return []
+
+        var actions = []
+
+        if (item.action.indexOf("copy:") === 0) {
+            var colonIdx = item.action.indexOf(":")
+            var secretPath = item.action.substring(colonIdx + 1)
+            actions.push({
+                icon: "content_copy",
+                text: "Copy password",
+                action: function() { root._copySecret(secretPath) }
+            })
+            actions.push({
+                icon: "person",
+                text: "Copy username",
+                action: function() { root._copyField(secretPath, "username") }
+            })
+        }
+
+        actions.push({
+            icon: "sync",
+            text: "Sync vault",
+            action: function() { root.syncAndRefresh() }
+        })
+
+        return actions
+    }
+
     function _copySecret(secretPath) {
         Quickshell.execDetached([gopassBinary, "show", "-c", secretPath])
         _showToast("Copied password for: " + secretPath)
+    }
+
+    // Copies a body field (e.g. username) from a secret. gopass show -c <secret> <key>
+    // exits non-zero if the key is absent, so we can give accurate feedback.
+    function _copyField(secretPath, field) {
+        var proc = copyFieldProcessComponent.createObject(root, {
+            command: [gopassBinary, "show", "-c", secretPath, field],
+            fieldName: field,
+            secretPath: secretPath
+        })
+        proc.running = true
+    }
+
+    property Component copyFieldProcessComponent: Component {
+        Process {
+            property string fieldName: ""
+            property string secretPath: ""
+
+            onExited: (exitCode) => {
+                if (exitCode === 0)
+                    root._showToast("Copied " + fieldName + " for: " + secretPath)
+                else
+                    root._showToast("No " + fieldName + " in " + secretPath)
+                destroy()
+            }
+        }
     }
 
     function _showToast(message) {

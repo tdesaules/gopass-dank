@@ -8,7 +8,7 @@ Plugin [DankMaterialShell](https://danklinux.com) de type **Launcher** permettan
 - Liste et filtrage des secrets du vault gopass en temps réel
 - Recherche multi-mots (tous les termes doivent correspondre, insensible à la casse)
 - Cache local des chemins de secrets pour un affichage instantané
-- Bouton d'action **Refresh vault** pour recharger le cache depuis gopass
+- Bouton d'action **Refresh vault** pour synchroniser le vault (`gopass sync`) et recharger le cache
 - Copie du mot de passe dans le presse-papier via `gopass show -c` (sélection d'un secret)
 
 ## Prérequis
@@ -44,7 +44,7 @@ dms restart
 
 Au moment de l'activation (quand on tape `pass`), le plugin exécute `gopass list --flat` pour récupérer la liste des secrets. Les secrets en cache sont affichés immédiatement pendant que le listage s'effectue en arrière-plan, puis la liste se met à jour à la fin du chargement.
 
-Pour recharger manuellement la liste (par exemple après un `gopass sync` effectué hors du plugin), cliquer sur l'entrée **Refresh vault** en tête de liste.
+Pour synchroniser le vault avec le remote et recharger la liste, cliquer sur l'entrée **Refresh vault** en tête de liste : le plugin exécute `gopass sync` (git pull/push) puis `gopass list --flat`.
 
 Le nom affiché correspond au dernier segment du chemin du secret, et le commentaire affiche le chemin parent.
 
@@ -80,12 +80,12 @@ gopass-dank/
 1. Au chargement, le plugin exécute `gopass list --flat` pour récupérer tous les chemins de secrets et alimente le cache
 2. Les chemins sont mis en cache en mémoire et persistés dans le state du plugin pour un affichage instantané au prochain chargement
 3. `getItems(query)` filtre le cache de manière synchrone (recherche multi-mots insensible à la casse)
-4. L'entrée **Refresh vault** relance `gopass list --flat` pour recharger le cache
+4. L'entrée **Refresh vault** exécute `gopass sync` (git pull/push) puis `gopass list --flat` pour synchroniser et recharger le cache
 5. `executeItem` lance `gopass show -c <secret>` qui déchiffre et copie le mot de passe dans le presse-papier
 
 > `gopass list --flat` ne déchiffre aucun secret, il liste uniquement les chemins stockés en clair sur le disque. Aucune phrase de passe n'est nécessaire pour le listage. La copie (`gopass show -c`) déchiffre le secret et peut déclencher une demande de phrase de passe age via pinentry si elle n'est pas en cache.
 >
-> La synchronisation git (`gopass sync`) n'est pas gérée par le plugin : utilisez `gopass sync` en dehors du launcher puis cliquez sur **Refresh vault** pour rafraîchir la liste.
+> La synchronisation git est déclenchée manuellement via le bouton **Refresh vault** (`gopass sync` puis `gopass list --flat`). Les credentials git doivent être configurés (clé SSH ou credential helper) pour éviter un blocage. En cas d'échec de la sync, le cache local est conservé et un toast s'affiche.
 
 ## Développement
 
