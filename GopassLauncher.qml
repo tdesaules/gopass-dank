@@ -3,10 +3,11 @@ import Quickshell
 import Quickshell.Io
 import qs.Services
 
-Item {
+QtObject {
     id: root
 
     property var pluginService: null
+    property string pluginId: "gopassDank"
     property string trigger: "pass"
 
     signal itemsChanged
@@ -41,13 +42,11 @@ Item {
         syncOnActivation = pluginService.loadPluginData("gopassDank", "syncOnActivation", true)
         syncIntervalSec = pluginService.loadPluginData("gopassDank", "syncIntervalSec", 60)
 
-        // Load cached secrets and last sync from state for instant display
         var cached = pluginService.loadPluginState("gopassDank", "secrets", [])
         if (cached && cached.length > 0)
             secrets = cached
         lastSync = pluginService.loadPluginState("gopassDank", "lastSync", 0)
 
-        // Quick local list to pick up changes since last cache (no git sync)
         refreshSecrets()
     }
 
@@ -56,12 +55,21 @@ Item {
             pluginService.savePluginData("gopassDank", "trigger", trigger)
     }
 
+    function _requestUpdate() {
+        if (!pluginService || !pluginId)
+            return
+        if (typeof pluginService.requestLauncherUpdate === "function")
+            pluginService.requestLauncherUpdate(pluginId)
+        else
+            console.warn("GopassDank: requestLauncherUpdate not available")
+    }
+
     function refreshSecrets() {
         if (loading)
             return
         if (!gopassBinary || gopassBinary.length === 0) {
             errorMessage = "Gopass binary path is not configured"
-            itemsChanged()
+            _requestUpdate()
             return
         }
 
@@ -77,7 +85,7 @@ Item {
             return
         if (!gopassBinary || gopassBinary.length === 0) {
             errorMessage = "Gopass binary path is not configured"
-            itemsChanged()
+            _requestUpdate()
             return
         }
 
@@ -120,11 +128,8 @@ Item {
                     root._showToast("Vault synced")
 
                 root.syncing = false
-                root.itemsChanged()
-                if (root.pluginService)
-                    root.pluginService.requestLauncherUpdate("gopassDank")
+                root._requestUpdate()
 
-                // Proceed to list secrets regardless of sync result
                 var listProc = root.listProcessComponent.createObject(root)
                 listProc.running = true
 
@@ -165,9 +170,7 @@ Item {
                         root.errorMessage = root.errorMessage || ("gopass exited with code " + exitCode)
                 }
                 root.loading = false
-                root.itemsChanged()
-                if (root.pluginService)
-                    root.pluginService.requestLauncherUpdate("gopassDank")
+                root._requestUpdate()
                 destroy()
             }
         }
@@ -177,7 +180,6 @@ Item {
         var now = Date.now()
         var isEmpty = !query || query.trim().length === 0
 
-        // On activation (empty query): sync+refresh automatically if stale
         if (!loading) {
             if (isEmpty && syncOnActivation
                     && (lastSync === 0 || (now - lastSync) > syncIntervalSec * 1000)) {
@@ -191,7 +193,6 @@ Item {
 
         var items = []
 
-        // Loading state with no cached data yet
         if (loading && secrets.length === 0) {
             items.push({
                 name: syncing ? "Syncing gopass vault..." : "Loading gopass vault...",
@@ -199,19 +200,20 @@ Item {
                 comment: syncing ? "Syncing with git, then fetching secrets"
                                  : "Fetching secret list from gopass",
                 action: "noop:",
-                categories: ["Gopass"]
+                categories: ["Gopass"],
+                _preScored: 9999
             })
             return items
         }
 
-        // Error state with no cached data
         if (errorMessage !== "" && secrets.length === 0) {
             items.push({
                 name: "Gopass error",
                 icon: "material:error",
                 comment: errorMessage,
                 action: "retry:",
-                categories: ["Gopass"]
+                categories: ["Gopass"],
+                _preScored: 9999
             })
             items.push({
                 name: "Retry",
@@ -223,19 +225,8 @@ Item {
             return items
         }
 
-        // No query: show all secrets up to maxResults
         if (isEmpty) {
-            // Subtle status indicator while syncing/refreshing in the background
-            if (loading) {
-                items.push({
-                    name: syncing ? "Syncing vault..." : "Refreshing vault...",
-                    icon: "material:sync",
-                    comment: syncing ? "Pulling latest entries from git"
-                                     : "Fetching secret list from gopass",
-                    action: "noop:",
-                    categories: ["Gopass"]
-                })
-            }
+            items.push(_makeRefreshItem())
 
             var shown = Math.min(maxResults, secrets.length)
             for (var i = 0; i < shown; i++)
@@ -254,7 +245,6 @@ Item {
             return items
         }
 
-        // Filter cached secrets by query (multi-word AND match, case-insensitive)
         var terms = query.trim().toLowerCase().split(/\s+/)
         for (var j = 0; j < secrets.length; j++) {
             var secret = secrets[j]
@@ -286,6 +276,29 @@ Item {
         return items
     }
 
+    function _makeRefreshItem() {
+        var name, comment, action
+        if (loading) {
+            name = syncing ? "Syncing vault..." : "Refreshing vault..."
+            comment = syncing ? "Pulling latest entries from git"
+                              : "Fetching secret list from gopass"
+            action = "noop:"
+        } else {
+            name = "Refresh vault"
+            comment = secrets.length + " secrets"
+                    + (lastSync > 0 ? " \u00b7 synced " + _formatAge(lastSync) : "")
+            action = "refresh:"
+        }
+        return {
+            name: name,
+            icon: "material:sync",
+            comment: comment,
+            action: action,
+            categories: ["Gopass"],
+            _preScored: 9999
+        }
+    }
+
     function _makeSecretItem(secret) {
         var parts = secret.split("/")
         var name = parts[parts.length - 1]
@@ -311,6 +324,9 @@ Item {
         case "copy":
             _copySecret(actionData)
             break
+        case "refresh":
+            syncAndRefresh()
+            break
         case "retry":
             syncAndRefresh()
             break
@@ -322,8 +338,6 @@ Item {
     }
 
     function _copySecret(secretPath) {
-        // gopass show -c decrypts and copies the password to the clipboard
-        // (gopass handles the clipboard internally via wl-copy/xclip)
         Quickshell.execDetached([gopassBinary, "show", "-c", secretPath])
         _showToast("Copied password for: " + secretPath)
     }
