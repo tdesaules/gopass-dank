@@ -3,7 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Services
 
-QtObject {
+Item {
     id: root
 
     property var pluginService: null
