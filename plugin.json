@@ -1,0 +1,23 @@
+{
+    "id": "gopassDank",
+    "name": "Gopass-Dank",
+    "description": "Search and access gopass secrets from the DankMaterialShell launcher",
+    "version": "0.1.0",
+    "author": "tdesaules",
+    "icon": "vpn_key",
+    "type": "launcher",
+    "capabilities": ["clipboard", "command-execution"],
+    "component": "./GopassLauncher.qml",
+    "settings": "./GopassSettings.qml",
+    "trigger": "pass",
+    "viewMode": "list",
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ],
+    "requires": [
+        "gopass"
+    ],
+    "requires_dms": ">=1.4.0"
+}
