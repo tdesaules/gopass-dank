@@ -60,8 +60,8 @@ QtObject {
         proc.running = true
     }
 
-    // Sync git (gopass sync) then refresh the local secret list. Used by the
-    // Refresh vault button so it acts as a "gopass sync" equivalent.
+    // Sync git (gopass sync) then refresh the local secret list. Invoked from
+    // the Tab context menu ("Sync vault") and the error retry action.
     function syncAndRefresh() {
         if (loading)
             return
@@ -190,8 +190,6 @@ QtObject {
         }
 
         if (isEmpty) {
-            items.push(_makeRefreshItem())
-
             var shown = Math.min(maxResults, secrets.length)
             for (var i = 0; i < shown; i++)
                 items.push(_makeSecretItem(secrets[i]))
@@ -240,25 +238,6 @@ QtObject {
         return items
     }
 
-    function _makeRefreshItem() {
-        var name, comment
-        if (loading) {
-            name = syncing ? "Syncing vault..." : "Refreshing vault..."
-            comment = syncing ? "Running gopass sync (git pull/push)"
-                              : "Fetching secret list from gopass"
-        } else {
-            name = "sync"
-            comment = secrets.length + " secrets \u00b7 click to sync & reload"
-        }
-        return {
-            name: name,
-            icon: "material:sync",
-            comment: comment,
-            action: loading ? "noop:" : "refresh:",
-            categories: ["Gopass"]
-        }
-    }
-
     function _makeSecretItem(secret) {
         var parts = secret.split("/")
         var name = parts[parts.length - 1]
@@ -283,9 +262,6 @@ QtObject {
         switch (actionType) {
         case "copy":
             _copySecret(actionData)
-            break
-        case "refresh":
-            syncAndRefresh()
             break
         case "retry":
             syncAndRefresh()
