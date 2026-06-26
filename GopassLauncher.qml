@@ -1,7 +1,9 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Common
 import qs.Services
+import qs.Widgets
 
 QtObject {
     id: root
@@ -21,6 +23,14 @@ QtObject {
     // Settings (loaded from plugin data)
     property string gopassBinary: "gopass"
     property int maxResults: 50
+
+    // In-memory passphrase cache (session only, never persisted). Injected as
+    // GOPASS_AGE_PASSWORD into gopass show so pinentry is never invoked.
+    property string _passphrase: ""
+    property string _pendingSecret: ""
+    property string _pendingField: ""
+    property string _pendingKind: ""
+    property var _passphraseDialog: null
 
     Component.onCompleted: {
         console.info("GopassDank: Plugin loaded")
@@ -284,7 +294,7 @@ QtObject {
             var colonIdx = item.action.indexOf(":")
             var secretPath = item.action.substring(colonIdx + 1)
             actions.push({
-                icon: "content_copy",
+                icon: "vpn_key",
                 text: "Copy password",
                 action: function() { root._copySecret(secretPath) }
             })
@@ -292,6 +302,11 @@ QtObject {
                 icon: "person",
                 text: "Copy username",
                 action: function() { root._copyField(secretPath, "username") }
+            })
+            actions.push({
+                icon: "timer",
+                text: "Copy TOTP",
+                action: function() { root._copyTotp(secretPath) }
             })
         }
 
@@ -304,32 +319,102 @@ QtObject {
         return actions
     }
 
+    // --- Passphrase-aware decryption (bypasses pinentry via GOPASS_AGE_PASSWORD) ---
+
     function _copySecret(secretPath) {
-        Quickshell.execDetached([gopassBinary, "show", "-c", secretPath])
-        _showToast("Copied password for: " + secretPath)
+        _requestSecret(secretPath, "", "password")
     }
 
-    // Copies a body field (e.g. username) from a secret. gopass show -c <secret> <key>
-    // exits non-zero if the key is absent, so we can give accurate feedback.
     function _copyField(secretPath, field) {
-        var proc = copyFieldProcessComponent.createObject(root, {
-            command: [gopassBinary, "show", "-c", secretPath, field],
-            fieldName: field,
-            secretPath: secretPath
+        _requestSecret(secretPath, field, "field")
+    }
+
+    function _copyTotp(secretPath) {
+        _requestSecret(secretPath, "", "totp")
+    }
+
+    function _requestSecret(secretPath, field, kind) {
+        _pendingSecret = secretPath
+        _pendingField = field
+        _pendingKind = kind
+        if (_passphrase !== "")
+            _runCopy()
+        else
+            _openPassphraseDialog()
+    }
+
+    function _runCopy() {
+        var args
+        if (_pendingKind === "totp")
+            args = [gopassBinary, "totp", "-c", _pendingSecret]
+        else {
+            args = [gopassBinary, "show", "-c", _pendingSecret]
+            if (_pendingField !== "")
+                args.push(_pendingField)
+        }
+        var proc = copyProcessComponent.createObject(root, {
+            command: args,
+            secretPath: _pendingSecret,
+            fieldName: _pendingField,
+            kind: _pendingKind
         })
         proc.running = true
     }
 
-    property Component copyFieldProcessComponent: Component {
-        Process {
-            property string fieldName: ""
-            property string secretPath: ""
+    function _onCopySuccess(secretPath, fieldName, kind) {
+        if (_passphraseDialog && _passphraseDialog.visible)
+            _passphraseDialog.hide()
+        if (kind === "totp")
+            _showToast("Copied TOTP code for: " + secretPath)
+        else if (fieldName === "")
+            _showToast("Copied password for: " + secretPath)
+        else
+            _showToast("Copied " + fieldName + " for: " + secretPath)
+    }
 
+    function _onCopyFailure(secretPath, fieldName, kind, exitCode, stderrText) {
+        var isDecrypt = exitCode === 11 || (stderrText && stderrText.toLowerCase().indexOf("ecrypt") !== -1)
+        if (isDecrypt) {
+            _passphrase = ""
+            if (_passphraseDialog && _passphraseDialog.visible)
+                _passphraseDialog.setError("Wrong passphrase, try again")
+            else
+                _showToast("Copy failed: wrong passphrase")
+        } else if (kind === "totp") {
+            if (_passphraseDialog && _passphraseDialog.visible)
+                _passphraseDialog.hide()
+            _showToast("No TOTP configured in " + secretPath)
+        } else if (fieldName !== "") {
+            if (_passphraseDialog && _passphraseDialog.visible)
+                _passphraseDialog.hide()
+            _showToast("No " + fieldName + " in " + secretPath)
+        } else {
+            if (_passphraseDialog && _passphraseDialog.visible)
+                _passphraseDialog.hide()
+            _showToast("Copy failed (exit " + exitCode + ")")
+        }
+    }
+
+    property Component copyProcessComponent: Component {
+        Process {
+            property string secretPath: ""
+            property string fieldName: ""
+            property string kind: ""
+            property string stderrText: ""
+            environment: ({
+                "GOPASS_AGE_PASSWORD": root._passphrase
+            })
+            stderr: SplitParser {
+                onRead: line => {
+                    if (line)
+                        stderrText += line + "\n"
+                }
+            }
             onExited: (exitCode) => {
                 if (exitCode === 0)
-                    root._showToast("Copied " + fieldName + " for: " + secretPath)
+                    root._onCopySuccess(secretPath, fieldName, kind)
                 else
-                    root._showToast("No " + fieldName + " in " + secretPath)
+                    root._onCopyFailure(secretPath, fieldName, kind, exitCode, stderrText)
                 destroy()
             }
         }
@@ -340,5 +425,131 @@ QtObject {
             ToastService.showInfo("Gopass-Dank", message)
         else
             console.log("GopassDank:", message)
+    }
+
+    // --- Passphrase dialog (native DMS-styled FloatingWindow) ---
+
+    function _openPassphraseDialog() {
+        if (!_passphraseDialog) {
+            _passphraseDialog = passphraseDialogComponent.createObject(root)
+            _passphraseDialog.submitted.connect(function(value) {
+                root._passphrase = value
+                root._runCopy()
+            })
+            _passphraseDialog.cancelled.connect(function() {
+                root._pendingSecret = ""
+                root._pendingField = ""
+            })
+        }
+        var label
+        if (_pendingKind === "totp")
+            label = "Generating TOTP: " + _pendingSecret
+        else
+            label = "Decrypting: " + _pendingSecret
+        if (_pendingField !== "")
+            label += " (" + _pendingField + ")"
+        _passphraseDialog.promptText = label
+        _passphraseDialog.show()
+    }
+
+    property Component passphraseDialogComponent: Component {
+        FloatingWindow {
+            id: dlg
+            visible: false
+            implicitWidth: 460
+            implicitHeight: 260
+            title: "Gopass passphrase"
+            color: Theme.surfaceContainer
+
+            property string promptText: ""
+            property string errorText: ""
+
+            signal submitted(string value)
+            signal cancelled()
+
+            function show() {
+                errorText = ""
+                field.clear()
+                visible = true
+                Qt.callLater(function() { field.forceActiveFocus() })
+            }
+
+            function hide() { visible = false }
+
+            function setError(msg) {
+                errorText = msg
+                field.clear()
+                Qt.callLater(function() { field.forceActiveFocus() })
+            }
+
+            onClosed: dlg.visible = false
+
+            Column {
+                anchors.fill: parent
+                anchors.margins: Theme.spacingL
+                spacing: Theme.spacingM
+
+                Row {
+                    spacing: Theme.spacingS
+                    DankIcon {
+                        name: "lock"
+                        size: Theme.iconSize
+                        color: Theme.primary
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    StyledText {
+                        text: "Enter gopass passphrase"
+                        font.pixelSize: Theme.fontSizeLarge
+                        font.weight: Font.Bold
+                        color: Theme.surfaceText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                StyledText {
+                    width: parent.width
+                    text: dlg.promptText
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceVariantText
+                    wrapMode: Text.WordWrap
+                    visible: dlg.promptText !== ""
+                }
+
+                DankTextField {
+                    id: field
+                    width: parent.width
+                    echoMode: TextInput.Password
+                    showPasswordToggle: true
+                    placeholderText: "Passphrase"
+                    leftIconName: "vpn_key"
+                    onAccepted: {
+                        if (field.text.length > 0) {
+                            dlg.submitted(field.text)
+                            field.clear()
+                        }
+                    }
+                    Keys.onEscapePressed: {
+                        dlg.cancelled()
+                        dlg.hide()
+                    }
+                }
+
+                StyledText {
+                    width: parent.width
+                    text: dlg.errorText
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.error
+                    wrapMode: Text.WordWrap
+                    visible: dlg.errorText !== ""
+                }
+
+                StyledText {
+                    width: parent.width
+                    text: "Enter to submit · Esc to cancel"
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.outline
+                }
+            }
+        }
     }
 }
