@@ -31,6 +31,7 @@ QtObject {
     property string _pendingField: ""
     property string _pendingKind: ""
     property var _passphraseDialog: null
+    property var _editDialog: null
 
     Component.onCompleted: {
         console.info("GopassDank: Plugin loaded")
@@ -308,6 +309,11 @@ QtObject {
                 text: "Copy TOTP",
                 action: function() { root._copyTotp(secretPath) }
             })
+            actions.push({
+                icon: "edit",
+                text: "Edit secret",
+                action: function() { root._editSecret(secretPath) }
+            })
         }
 
         actions.push({
@@ -420,6 +426,101 @@ QtObject {
         }
     }
 
+    // --- Secret editing (load via show -f, save via insert -f) ---
+
+    function _editSecret(secretPath) {
+        console.info("GopassDank EDIT: _editSecret " + secretPath + " passphraseCached=" + (_passphrase !== ""))
+        _pendingSecret = secretPath
+        _pendingKind = "edit"
+        if (_passphrase !== "")
+            _loadForEdit()
+        else
+            _openPassphraseDialog()
+    }
+
+    function _loadForEdit() {
+        console.info("GopassDank EDIT: _loadForEdit " + _pendingSecret)
+        var proc = loadEditProcessComponent.createObject(root, {
+            secretPath: _pendingSecret
+        })
+        proc.running = true
+    }
+
+    function _openEditDialog(secretPath, content) {
+        console.info("GopassDank EDIT: _openEditDialog " + secretPath + " contentLen=" + content.length)
+        if (_passphraseDialog && _passphraseDialog.visible)
+            _passphraseDialog.hide()
+        if (!_editDialog) {
+            console.info("GopassDank EDIT: creating edit dialog component")
+            _editDialog = editDialogComponent.createObject(root)
+            _editDialog.saved.connect(function(newContent) {
+                root._saveSecret(_editDialog.secretPath, newContent)
+            })
+        }
+        _editDialog.secretPath = secretPath
+        _editDialog.originalContent = content
+        _editDialog.show()
+    }
+
+    function _saveSecret(secretPath, content) {
+        var proc = saveEditProcessComponent.createObject(root, {
+            secretPath: secretPath,
+            editContent: content
+        })
+        proc.running = true
+    }
+
+    property Component loadEditProcessComponent: Component {
+        Process {
+            property string secretPath: ""
+            property var lines: []
+            command: [root.gopassBinary, "show", "-f", secretPath]
+            environment: ({
+                "GOPASS_AGE_PASSWORD": root._passphrase
+            })
+            stdout: SplitParser {
+                onRead: line => { lines.push(line) }
+            }
+            onExited: (exitCode) => {
+                console.info("GopassDank EDIT: load exit=" + exitCode + " lines=" + lines.length)
+                if (exitCode === 0)
+                    root._openEditDialog(secretPath, lines.join("\n"))
+                else {
+                    root._passphrase = ""
+                    if (root._passphraseDialog && root._passphraseDialog.visible)
+                        root._passphraseDialog.setError("Wrong passphrase, try again")
+                    else
+                        root._showToast("Failed to load secret for edit")
+                }
+                destroy()
+            }
+        }
+    }
+
+    property Component saveEditProcessComponent: Component {
+        Process {
+            property string secretPath: ""
+            property string editContent: ""
+            command: ["sh", "-c", "printf '%s' \"$EC\" | \"$GP\" insert -f \"$SP\""]
+            environment: ({
+                "EC": editContent,
+                "SP": secretPath,
+                "GP": root.gopassBinary,
+                "GOPASS_AGE_PASSWORD": root._passphrase
+            })
+            onExited: (exitCode) => {
+                if (exitCode === 0) {
+                    if (root._editDialog && root._editDialog.visible)
+                        root._editDialog.hide()
+                    root._showToast("Saved secret: " + secretPath)
+                } else {
+                    root._showToast("Failed to save (exit " + exitCode + ")")
+                }
+                destroy()
+            }
+        }
+    }
+
     function _showToast(message) {
         if (typeof ToastService !== "undefined")
             ToastService.showInfo("Gopass-Dank", message)
@@ -434,7 +535,10 @@ QtObject {
             _passphraseDialog = passphraseDialogComponent.createObject(root)
             _passphraseDialog.submitted.connect(function(value) {
                 root._passphrase = value
-                root._runCopy()
+                if (root._pendingKind === "edit")
+                    root._loadForEdit()
+                else
+                    root._runCopy()
             })
             _passphraseDialog.cancelled.connect(function() {
                 root._pendingSecret = ""
@@ -444,6 +548,8 @@ QtObject {
         var label
         if (_pendingKind === "totp")
             label = "Generating TOTP: " + _pendingSecret
+        else if (_pendingKind === "edit")
+            label = "Loading for edit: " + _pendingSecret
         else
             label = "Decrypting: " + _pendingSecret
         if (_pendingField !== "")
@@ -548,6 +654,149 @@ QtObject {
                     text: "Enter to submit · Esc to cancel"
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.outline
+                }
+            }
+        }
+    }
+
+    // --- Edit dialog (FloatingWindow with a multiline editor) ---
+
+    property Component editDialogComponent: Component {
+        FloatingWindow {
+            id: editDlg
+            visible: false
+            implicitWidth: 640
+            implicitHeight: 520
+            title: "Edit gopass secret"
+            color: Theme.surfaceContainer
+
+            property string secretPath: ""
+            property string originalContent: ""
+
+            signal saved(string content)
+            signal cancelled()
+
+            function show() {
+                visible = true
+                Qt.callLater(function() { editor.forceActiveFocus() })
+            }
+
+            function hide() { visible = false }
+
+            onClosed: editDlg.visible = false
+
+            Row {
+                id: header
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Theme.spacingL
+                spacing: Theme.spacingS
+
+                DankIcon {
+                    name: "edit"
+                    size: Theme.iconSize
+                    color: Theme.primary
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                StyledText {
+                    text: editDlg.secretPath
+                    font.pixelSize: Theme.fontSizeLarge
+                    font.weight: Font.Bold
+                    color: Theme.surfaceText
+                    elide: Text.ElideRight
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            Flickable {
+                id: flick
+                anchors.top: header.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: buttonsRow.top
+                anchors.margins: Theme.spacingL
+                clip: true
+                flickableDirection: Flickable.VerticalFlick
+                contentHeight: Math.max(editor.implicitHeight, flick.height)
+
+                TextEdit {
+                    id: editor
+                    width: flick.width
+                    wrapMode: TextEdit.Wrap
+                    text: editDlg.originalContent
+                    font.family: "monospace"
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceText
+                    selectionColor: Theme.withAlpha(Theme.primary, 0.4)
+                    selectedTextColor: Theme.surfaceText
+                    focus: true
+                    Keys.onPressed: event => {
+                        if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                            editDlg.saved(editor.text)
+                            event.accepted = true
+                        }
+                    }
+                    Keys.onEscapePressed: {
+                        editDlg.cancelled()
+                        editDlg.hide()
+                    }
+                }
+            }
+
+            Row {
+                id: buttonsRow
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                anchors.margins: Theme.spacingL
+                spacing: Theme.spacingS
+
+                Rectangle {
+                    width: 96
+                    height: 38
+                    radius: Theme.cornerRadius
+                    color: cancelArea.containsMouse ? Theme.surfaceContainerHigh : "transparent"
+                    border.color: Theme.outlineMedium
+                    border.width: 1
+                    StyledText {
+                        anchors.centerIn: parent
+                        text: "Cancel"
+                        color: Theme.surfaceText
+                        font.pixelSize: Theme.fontSizeMedium
+                    }
+                    MouseArea {
+                        id: cancelArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            editDlg.cancelled()
+                            editDlg.hide()
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 96
+                    height: 38
+                    radius: Theme.cornerRadius
+                    color: saveArea.containsMouse ? Theme.withAlpha(Theme.primary, 0.2) : Theme.withAlpha(Theme.primary, 0.12)
+                    border.color: Theme.primary
+                    border.width: 1
+                    StyledText {
+                        anchors.centerIn: parent
+                        text: "Save"
+                        color: Theme.primary
+                        font.weight: Font.Bold
+                        font.pixelSize: Theme.fontSizeMedium
+                    }
+                    MouseArea {
+                        id: saveArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: editDlg.saved(editor.text)
+                    }
                 }
             }
         }
