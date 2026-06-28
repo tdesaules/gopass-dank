@@ -1,8 +1,8 @@
 {
     "id": "gopassDank",
     "name": "Gopass-Dank",
-    "description": "Search and access gopass secrets from the DankMaterialShell launcher",
-    "version": "0.12.0",
+    "description": "Search, copy and edit gopass secrets (password, TOTP) from the DankMaterialShell launcher",
+    "version": "1.0.0",
     "author": "tdesaules",
     "icon": "vpn_key",
     "type": "launcher",

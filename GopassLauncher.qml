@@ -12,8 +12,6 @@ QtObject {
     property string pluginId: "gopassDank"
     property string trigger: "pass"
 
-    signal itemsChanged
-
     // Cached secret paths from gopass list --flat
     property var secrets: []
     property bool loading: false
@@ -55,12 +53,19 @@ QtObject {
             pluginService.savePluginData(pluginId, "trigger", trigger)
     }
 
+    // Ask the launcher to re-run getItems. DMS listens to requestLauncherUpdate
+    // (not a custom itemsChanged signal).
+    function _refreshLauncher() {
+        if (pluginService)
+            pluginService.requestLauncherUpdate(pluginId)
+    }
+
     function refreshSecrets() {
         if (loading)
             return
         if (!gopassBinary || gopassBinary.length === 0) {
             errorMessage = "Gopass binary path is not configured"
-            root.itemsChanged()
+            root._refreshLauncher()
             return
         }
 
@@ -78,7 +83,7 @@ QtObject {
             return
         if (!gopassBinary || gopassBinary.length === 0) {
             errorMessage = "Gopass binary path is not configured"
-            root.itemsChanged()
+            root._refreshLauncher()
             return
         }
 
@@ -156,7 +161,7 @@ QtObject {
                         root.errorMessage = root.errorMessage || ("gopass exited with code " + exitCode)
                 }
                 root.loading = false
-                root.itemsChanged()
+                root._refreshLauncher()
                 destroy()
             }
         }
@@ -429,7 +434,6 @@ QtObject {
     // --- Secret editing (load via show -f, save via insert -f) ---
 
     function _editSecret(secretPath) {
-        console.info("GopassDank EDIT: _editSecret " + secretPath + " passphraseCached=" + (_passphrase !== ""))
         _pendingSecret = secretPath
         _pendingKind = "edit"
         if (_passphrase !== "")
@@ -439,7 +443,6 @@ QtObject {
     }
 
     function _loadForEdit() {
-        console.info("GopassDank EDIT: _loadForEdit " + _pendingSecret)
         var proc = loadEditProcessComponent.createObject(root, {
             secretPath: _pendingSecret
         })
@@ -447,11 +450,9 @@ QtObject {
     }
 
     function _openEditDialog(secretPath, content) {
-        console.info("GopassDank EDIT: _openEditDialog " + secretPath + " contentLen=" + content.length)
         if (_passphraseDialog && _passphraseDialog.visible)
             _passphraseDialog.hide()
         if (!_editDialog) {
-            console.info("GopassDank EDIT: creating edit dialog component")
             _editDialog = editDialogComponent.createObject(root)
             _editDialog.saved.connect(function(newContent) {
                 root._saveSecret(_editDialog.secretPath, newContent)
@@ -482,7 +483,6 @@ QtObject {
                 onRead: line => { lines.push(line) }
             }
             onExited: (exitCode) => {
-                console.info("GopassDank EDIT: load exit=" + exitCode + " lines=" + lines.length)
                 if (exitCode === 0)
                     root._openEditDialog(secretPath, lines.join("\n"))
                 else {
