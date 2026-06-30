@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-06-30
+
+### Added
+
+- **Delete secret** action in the launcher context menu (Tab) — a native
+  confirmation popup guards the deletion, then runs `gopass rm -f`. No passphrase
+  is needed (`rm` doesn't decrypt). The local secret cache is refreshed so the
+  entry disappears from the list. Git push to the remote is handled by gopass's
+  `core.autopush`.
+- **Add new secret** action (always available in the Tab menu) — a path-entry
+  popup collects the new secret's path, then the existing passphrase + editor
+  flow is reused to author the content. Saved through the canonical
+  `gopass insert -f`, followed by a local cache refresh (push via
+  `core.autopush`).
+- Reusable native confirmation and path-entry dialogs (`FloatingWindow`).
+
+### Fixed
+
+- Edit dialog retained the previous secret's content when reused (adding a new
+  secret or editing a different one). The editor content is now reset explicitly
+  on each open.
+- The passphrase reveal toggle (eye icon) had no effect — `echoMode` is now
+  bound to the field's `passwordVisible` (the pattern expected by
+  `DankTextField`).
+- The edit dialog now shows a "Saving..." state with its buttons disabled while
+  `gopass insert` (and the auto-push to the git remote) runs, so the ~3 s write
+  is no longer silent.
+
 ## [1.0.0] - 2026-06-28
 
 First stable release.
@@ -56,4 +84,5 @@ Iterative development builds prior to the first stable release.
 - Multiple refactors of the plugin lifecycle and the async refresh mechanism
   (auto-refresh, manual refresh, request-launcher-update wiring).
 
+[1.1.0]: https://github.com/tdesaules/gopass-dank/releases/tag/v1.1.0
 [1.0.0]: https://github.com/tdesaules/gopass-dank/releases/tag/v1.0.0

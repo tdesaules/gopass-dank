@@ -16,6 +16,9 @@ copy and edit secrets stored in a [gopass](https://github.com/gopasspw/gopass) v
   - TOTP code (`gopass totp -c`)
 - **Edit secret** — a native editor window loads the full content and saves it back
   (`gopass show -f` → `gopass insert -f`)
+- **Add new secret** — a path-entry popup, then the editor, to create a new
+  secret (`gopass insert -f`)
+- **Delete secret** — a confirmation popup guards `gopass rm -f`
 - **Sync vault** — `gopass sync` (git pull/push) then rebuild the cache
 - **Native passphrase dialog** that fully bypasses `pinentry`: the passphrase is
   captured in a DMS-styled window, injected to gopass via `GOPASS_AGE_PASSWORD`,
@@ -64,6 +67,8 @@ dms restart
   | **Copy username** | Copies the `username` body field |
   | **Copy TOTP** | `gopass totp -c` (requires a `totp:` entry, see below) |
   | **Edit secret** | Opens a native editor window |
+  | **Delete secret** | `gopass rm -f` (with confirmation) |
+  | **Add new secret** | Path popup → editor → `gopass insert -f` |
   | **Sync vault** | `gopass sync` then reloads the cache |
 
 ### Display format

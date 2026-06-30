@@ -1,0 +1,83 @@
+name: Release
+
+# Creates a GitHub release tagged "v<version>" from the semver version declared
+# in plugin.json. Idempotent: skips if the release already exists.
+on:
+  push:
+    branches: [main]
+    paths:
+      - plugin.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version from plugin.json
+        id: meta
+        run: |
+          VERSION="$(jq -r '.version' plugin.json)"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "::error::No version found in plugin.json"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          # Pre-release if the version contains a hyphen (e.g. 1.2.0-rc.1)
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check if release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release $TAG already exists — skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release notes from CHANGELOG.md
+        if: steps.check.outputs.exists == 'false'
+        id: notes
+        run: |
+          NOTES="$(awk -v ver='${{ steps.meta.outputs.version }}' '
+            $0 ~ "^## \\[" ver "\\]" { c=1; next }
+            /^## \[/ && c { exit }
+            c { print }
+          ' CHANGELOG.md)"
+          if [ -z "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' "$NOTES" > /tmp/notes.md
+            echo "fallback=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          ARGS=(--title "$TAG" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY")
+          if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
+            ARGS+=(--prerelease)
+          fi
+          if [ "${{ steps.notes.outputs.fallback }}" = "true" ]; then
+            ARGS+=(--generate-notes)
+          else
+            ARGS+=(--notes-file /tmp/notes.md)
+          fi
+          gh release create "$TAG" "${ARGS[@]}"

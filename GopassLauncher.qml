@@ -30,6 +30,10 @@ QtObject {
     property string _pendingKind: ""
     property var _passphraseDialog: null
     property var _editDialog: null
+    property var _confirmDialog: null
+    property var _pathDialog: null
+    property string _pendingDeletePath: ""
+    property bool _isNewSecret: false
 
     Component.onCompleted: {
         console.info("GopassDank: Plugin loaded")
@@ -319,7 +323,18 @@ QtObject {
                 text: "Edit secret",
                 action: function() { root._editSecret(secretPath) }
             })
+            actions.push({
+                icon: "delete",
+                text: "Delete secret",
+                action: function() { root._deleteSecret(secretPath) }
+            })
         }
+
+        actions.push({
+            icon: "add",
+            text: "Add new secret",
+            action: function() { root._addSecret() }
+        })
 
         actions.push({
             icon: "sync",
@@ -436,6 +451,7 @@ QtObject {
     function _editSecret(secretPath) {
         _pendingSecret = secretPath
         _pendingKind = "edit"
+        _isNewSecret = false
         if (_passphrase !== "")
             _loadForEdit()
         else
@@ -455,6 +471,7 @@ QtObject {
         if (!_editDialog) {
             _editDialog = editDialogComponent.createObject(root)
             _editDialog.saved.connect(function(newContent) {
+                _editDialog.saving = true
                 root._saveSecret(_editDialog.secretPath, newContent)
             })
         }
@@ -466,9 +483,58 @@ QtObject {
     function _saveSecret(secretPath, content) {
         var proc = saveEditProcessComponent.createObject(root, {
             secretPath: secretPath,
-            editContent: content
+            editContent: content,
+            refreshAfter: root._isNewSecret
         })
+        _isNewSecret = false
         proc.running = true
+    }
+
+    // --- Secret deletion (gopass rm -f; no passphrase: rm doesn't decrypt) ---
+
+    function _deleteSecret(secretPath) {
+        if (!_confirmDialog) {
+            _confirmDialog = confirmDialogComponent.createObject(root)
+            _confirmDialog.confirmed.connect(function() {
+                _confirmDialog.hide()
+                if (root._pendingDeletePath !== "") {
+                    var proc = deleteProcessComponent.createObject(root, {
+                        secretPath: root._pendingDeletePath
+                    })
+                    proc.running = true
+                    root._pendingDeletePath = ""
+                }
+            })
+            _confirmDialog.cancelled.connect(function() {
+                root._pendingDeletePath = ""
+            })
+        }
+        _pendingDeletePath = secretPath
+        _confirmDialog.messageText = "Delete \"" + secretPath + "\"?\nThis cannot be undone."
+        _confirmDialog.confirmText = "Delete"
+        _confirmDialog.danger = true
+        _confirmDialog.show()
+    }
+
+    // --- Secret creation (path popup -> passphrase if needed -> editor empty) ---
+
+    function _addSecret() {
+        if (!_pathDialog) {
+            _pathDialog = pathDialogComponent.createObject(root)
+            _pathDialog.submitted.connect(function(path) {
+                root._pendingSecret = path
+                root._pendingField = ""
+                root._pendingKind = "add"
+                root._pathDialog.hide()
+                if (root._passphrase !== "") {
+                    root._isNewSecret = true
+                    root._openEditDialog(root._pendingSecret, "")
+                } else {
+                    root._openPassphraseDialog()
+                }
+            })
+        }
+        _pathDialog.show()
     }
 
     property Component loadEditProcessComponent: Component {
@@ -501,6 +567,7 @@ QtObject {
         Process {
             property string secretPath: ""
             property string editContent: ""
+            property bool refreshAfter: false
             command: ["sh", "-c", "printf '%s' \"$EC\" | \"$GP\" insert -f \"$SP\""]
             environment: ({
                 "EC": editContent,
@@ -510,11 +577,36 @@ QtObject {
             })
             onExited: (exitCode) => {
                 if (exitCode === 0) {
-                    if (root._editDialog && root._editDialog.visible)
-                        root._editDialog.hide()
+                    if (root._editDialog) {
+                        root._editDialog.saving = false
+                        if (root._editDialog.visible)
+                            root._editDialog.hide()
+                    }
                     root._showToast("Saved secret: " + secretPath)
+                    if (refreshAfter)
+                        root.refreshSecrets()
                 } else {
+                    if (root._editDialog)
+                        root._editDialog.saving = false
                     root._showToast("Failed to save (exit " + exitCode + ")")
+                }
+                destroy()
+            }
+        }
+    }
+
+    // gopass rm -f deletes the secret (no decryption, no passphrase). Git push
+    // to the remote is handled by gopass's core.autopush.
+    property Component deleteProcessComponent: Component {
+        Process {
+            property string secretPath: ""
+            command: [root.gopassBinary, "rm", "-f", secretPath]
+            onExited: (exitCode) => {
+                if (exitCode === 0) {
+                    root._showToast("Deleted secret: " + secretPath)
+                    root.refreshSecrets()
+                } else {
+                    root._showToast("Failed to delete (exit " + exitCode + ")")
                 }
                 destroy()
             }
@@ -535,10 +627,15 @@ QtObject {
             _passphraseDialog = passphraseDialogComponent.createObject(root)
             _passphraseDialog.submitted.connect(function(value) {
                 root._passphrase = value
-                if (root._pendingKind === "edit")
+                if (root._pendingKind === "edit") {
+                    root._isNewSecret = false
                     root._loadForEdit()
-                else
+                } else if (root._pendingKind === "add") {
+                    root._isNewSecret = true
+                    root._openEditDialog(root._pendingSecret, "")
+                } else {
                     root._runCopy()
+                }
             })
             _passphraseDialog.cancelled.connect(function() {
                 root._pendingSecret = ""
@@ -550,6 +647,8 @@ QtObject {
             label = "Generating TOTP: " + _pendingSecret
         else if (_pendingKind === "edit")
             label = "Loading for edit: " + _pendingSecret
+        else if (_pendingKind === "add")
+            label = "Creating new secret: " + _pendingSecret
         else
             label = "Decrypting: " + _pendingSecret
         if (_pendingField !== "")
@@ -562,9 +661,9 @@ QtObject {
         FloatingWindow {
             id: dlg
             visible: false
-            implicitWidth: 460
-            implicitHeight: 260
-            title: "Gopass passphrase"
+            implicitWidth: 620
+            implicitHeight: 160
+            title: "Gopass Passphrase"
             color: Theme.surfaceContainer
 
             property string promptText: ""
@@ -624,7 +723,7 @@ QtObject {
                 DankTextField {
                     id: field
                     width: parent.width
-                    echoMode: TextInput.Password
+                    echoMode: field.passwordVisible ? TextInput.Normal : TextInput.Password
                     showPasswordToggle: true
                     placeholderText: "Passphrase"
                     leftIconName: "vpn_key"
@@ -665,18 +764,21 @@ QtObject {
         FloatingWindow {
             id: editDlg
             visible: false
-            implicitWidth: 640
-            implicitHeight: 520
-            title: "Edit gopass secret"
+            implicitWidth: 620
+            implicitHeight: 310
+            title: "Gopass Edit Secret"
             color: Theme.surfaceContainer
 
             property string secretPath: ""
             property string originalContent: ""
+            property bool saving: false
 
             signal saved(string content)
             signal cancelled()
 
             function show() {
+                editor.text = editDlg.originalContent
+                saving = false
                 visible = true
                 Qt.callLater(function() { editor.forceActiveFocus() })
             }
@@ -724,15 +826,16 @@ QtObject {
                     id: editor
                     width: flick.width
                     wrapMode: TextEdit.Wrap
-                    text: editDlg.originalContent
+                    text: ""
                     font.family: "monospace"
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceText
                     selectionColor: Theme.withAlpha(Theme.primary, 0.4)
                     selectedTextColor: Theme.surfaceText
                     focus: true
+                    enabled: !editDlg.saving
                     Keys.onPressed: event => {
-                        if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                        if (!editDlg.saving && (event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
                             editDlg.saved(editor.text)
                             event.accepted = true
                         }
@@ -769,6 +872,7 @@ QtObject {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        enabled: !editDlg.saving
                         onClicked: {
                             editDlg.cancelled()
                             editDlg.hide()
@@ -777,15 +881,16 @@ QtObject {
                 }
 
                 Rectangle {
-                    width: 96
+                    width: 110
                     height: 38
                     radius: Theme.cornerRadius
+                    opacity: editDlg.saving ? 0.6 : 1.0
                     color: saveArea.containsMouse ? Theme.withAlpha(Theme.primary, 0.2) : Theme.withAlpha(Theme.primary, 0.12)
                     border.color: Theme.primary
                     border.width: 1
                     StyledText {
                         anchors.centerIn: parent
-                        text: "Save"
+                        text: editDlg.saving ? "Saving..." : "Save"
                         color: Theme.primary
                         font.weight: Font.Bold
                         font.pixelSize: Theme.fontSizeMedium
@@ -795,8 +900,202 @@ QtObject {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        enabled: !editDlg.saving
                         onClicked: editDlg.saved(editor.text)
                     }
+                }
+            }
+        }
+    }
+
+    // --- Generic confirmation dialog (FloatingWindow with Cancel/Confirm) ---
+
+    property Component confirmDialogComponent: Component {
+        FloatingWindow {
+            id: confirmDlg
+            visible: false
+            implicitWidth: 620
+            implicitHeight: 160
+            title: "Gopass Confirm"
+            color: Theme.surfaceContainer
+
+            property string messageText: ""
+            property string confirmText: "Confirm"
+            property bool danger: false
+
+            signal confirmed()
+            signal cancelled()
+
+            function show() { visible = true }
+            function hide() { visible = false }
+
+            onClosed: {
+                confirmDlg.visible = false
+                confirmDlg.cancelled()
+            }
+
+            Row {
+                id: msgRow
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Theme.spacingL
+                spacing: Theme.spacingS
+
+                DankIcon {
+                    name: "warning"
+                    size: Theme.iconSize
+                    color: confirmDlg.danger ? Theme.error : Theme.primary
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                StyledText {
+                    width: msgRow.width - Theme.iconSize - Theme.spacingS
+                    text: confirmDlg.messageText
+                    font.pixelSize: Theme.fontSizeMedium
+                    color: Theme.surfaceText
+                    wrapMode: Text.WordWrap
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            Row {
+                id: confirmBtnRow
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                anchors.margins: Theme.spacingL
+                spacing: Theme.spacingS
+
+                Rectangle {
+                    width: 96
+                    height: 38
+                    radius: Theme.cornerRadius
+                    color: confirmCancelArea.containsMouse ? Theme.surfaceContainerHigh : "transparent"
+                    border.color: Theme.outlineMedium
+                    border.width: 1
+                    StyledText {
+                        anchors.centerIn: parent
+                        text: "Cancel"
+                        color: Theme.surfaceText
+                        font.pixelSize: Theme.fontSizeMedium
+                    }
+                    MouseArea {
+                        id: confirmCancelArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            confirmDlg.cancelled()
+                            confirmDlg.hide()
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 96
+                    height: 38
+                    radius: Theme.cornerRadius
+                    color: confirmActionArea.containsMouse
+                        ? (confirmDlg.danger ? Theme.withAlpha(Theme.error, 0.3) : Theme.withAlpha(Theme.primary, 0.2))
+                        : (confirmDlg.danger ? Theme.withAlpha(Theme.error, 0.15) : Theme.withAlpha(Theme.primary, 0.12))
+                    border.color: confirmDlg.danger ? Theme.error : Theme.primary
+                    border.width: 1
+                    StyledText {
+                        anchors.centerIn: parent
+                        text: confirmDlg.confirmText
+                        color: confirmDlg.danger ? Theme.error : Theme.primary
+                        font.weight: Font.Bold
+                        font.pixelSize: Theme.fontSizeMedium
+                    }
+                    MouseArea {
+                        id: confirmActionArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: confirmDlg.confirmed()
+                    }
+                }
+            }
+        }
+    }
+
+    // --- New-secret path dialog ---
+
+    property Component pathDialogComponent: Component {
+        FloatingWindow {
+            id: pathDlg
+            visible: false
+            implicitWidth: 620
+            implicitHeight: 160
+            title: "Gopass New Secret"
+            color: Theme.surfaceContainer
+
+            signal submitted(string path)
+            signal cancelled()
+
+            function show() {
+                pathField.clear()
+                visible = true
+                Qt.callLater(function() { pathField.forceActiveFocus() })
+            }
+            function hide() { visible = false }
+
+            onClosed: {
+                pathDlg.visible = false
+                pathDlg.cancelled()
+            }
+
+            Column {
+                anchors.fill: parent
+                anchors.margins: Theme.spacingL
+                spacing: Theme.spacingM
+
+                Row {
+                    spacing: Theme.spacingS
+                    DankIcon {
+                        name: "add"
+                        size: Theme.iconSize
+                        color: Theme.primary
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    StyledText {
+                        text: "New secret path"
+                        font.pixelSize: Theme.fontSizeLarge
+                        font.weight: Font.Bold
+                        color: Theme.surfaceText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                StyledText {
+                    width: parent.width
+                    text: "Enter the path for the new secret (e.g. websites/github.com/username)."
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceVariantText
+                    wrapMode: Text.WordWrap
+                }
+
+                DankTextField {
+                    id: pathField
+                    width: parent.width
+                    placeholderText: "websites/github.com/username"
+                    leftIconName: "folder"
+                    onAccepted: {
+                        if (pathField.text.trim().length > 0) {
+                            pathDlg.submitted(pathField.text.trim())
+                            pathField.clear()
+                        }
+                    }
+                    Keys.onEscapePressed: {
+                        pathDlg.cancelled()
+                        pathDlg.hide()
+                    }
+                }
+
+                StyledText {
+                    width: parent.width
+                    text: "Enter to create · Esc to cancel"
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.outline
                 }
             }
         }
