@@ -1,4 +1,4 @@
-# Gopass-Dank
+# GoPass DMS
 
 A [DankMaterialShell](https://danklinux.com) **launcher** plugin that lets you search,
 copy and edit secrets stored in a [gopass](https://github.com/gopasspw/gopass) vault
@@ -40,7 +40,7 @@ copy and edit secrets stored in a [gopass](https://github.com/gopasspw/gopass) v
 
 ```sh
 mkdir -p ~/.config/DankMaterialShell/plugins
-git clone https://github.com/tdesaules/gopass-dank.git ~/.config/DankMaterialShell/plugins/gopass-dank
+git clone https://github.com/tdesaules/gopass-dms.git ~/.config/DankMaterialShell/plugins/gopass-dms
 dms restart
 ```
 
@@ -48,7 +48,7 @@ dms restart
 
 1. Open **Settings → Plugins**
 2. Click **Scan for Plugins**
-3. Enable **Gopass-Dank**
+3. Enable **GoPass DMS**
 4. Restart the shell: `dms restart`
 
 ## Usage
@@ -111,7 +111,7 @@ is enabled.
 
 ## Configuration
 
-Available in **Settings → Plugins → Gopass-Dank**:
+Available in **Settings → Plugins → GoPass DMS**:
 
 | Setting | Description | Default |
 |---------|-------------|---------|
@@ -119,15 +119,15 @@ Available in **Settings → Plugins → Gopass-Dank**:
 | Gopass Binary | Path to the `gopass` executable | `gopass` |
 | Max Results | Maximum number of secrets displayed | `50` |
 
-> After changing the trigger, reload the plugin: `dms ipc call plugins reload gopassDank`
+> After changing the trigger, reload the plugin: `dms ipc call plugins reload gopassDms`
 
 ## Architecture
 
 ```
-gopass-dank/
+gopass-dms/
 ├── plugin.json          # Plugin manifest
-├── GopassLauncher.qml   # Launcher component (search, copy, edit, dialogs)
-├── GopassSettings.qml   # Settings UI
+├── GopassDmsLauncher.qml   # Launcher component (search, copy, edit, dialogs)
+├── GopassDmsSettings.qml   # Settings UI
 ├── README.md
 ├── CHANGELOG.md
 └── LICENSE
@@ -166,10 +166,10 @@ gopass-dank/
 git clone https://github.com/AvengeMedia/DankMaterialShell.git ~/repos/DankMaterialShell
 
 # Symlink the plugin into your plugins dir (so reloads pick up edits directly)
-ln -sf "$PWD" ~/.config/DankMaterialShell/plugins/gopass-dank
+ln -sf "$PWD" ~/.config/DankMaterialShell/plugins/gopass-dms
 
 # Reload the plugin after changes
-dms ipc call plugins reload gopassDank
+dms ipc call plugins reload gopassDms
 
 # Status
 dms ipc call plugins list

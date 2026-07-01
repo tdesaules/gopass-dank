@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-07-01
+
+### Changed
+
+- **Renamed plugin**: id `gopassDank` → `gopassDms`, display name
+  `Gopass-Dank` → `GoPass DMS`, repository and install folder
+  `gopass-dank` → `gopass-dms`. QML entry points renamed
+  `GopassLauncher.qml` → `GopassDmsLauncher.qml` and
+  `GopassSettings.qml` → `GopassDmsSettings.qml` (paths updated in
+  `plugin.json`).
+- Log prefix and toast title updated to `GopassDms:` / `GoPass DMS`.
+
+### Notes
+
+- The persisted secret-path cache is keyed by plugin id; changing the id
+  resets it on first reload. It is regenerated automatically by the next
+  `gopass list`, so no user action is required.
+
 ## [1.1.0] - 2026-06-30
 
 ### Added
@@ -84,5 +102,6 @@ Iterative development builds prior to the first stable release.
 - Multiple refactors of the plugin lifecycle and the async refresh mechanism
   (auto-refresh, manual refresh, request-launcher-update wiring).
 
-[1.1.0]: https://github.com/tdesaules/gopass-dank/releases/tag/v1.1.0
-[1.0.0]: https://github.com/tdesaules/gopass-dank/releases/tag/v1.0.0
+[2.0.0]: https://github.com/tdesaules/gopass-dms/releases/tag/v2.0.0
+[1.1.0]: https://github.com/tdesaules/gopass-dms/releases/tag/v1.1.0
+[1.0.0]: https://github.com/tdesaules/gopass-dms/releases/tag/v1.0.0

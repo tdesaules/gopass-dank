@@ -9,7 +9,7 @@ QtObject {
     id: root
 
     property var pluginService: null
-    property string pluginId: "gopassDank"
+    property string pluginId: "gopassDms"
     property string trigger: "pass"
 
     // Cached secret paths from gopass list --flat
@@ -36,7 +36,7 @@ QtObject {
     property bool _isNewSecret: false
 
     Component.onCompleted: {
-        console.info("GopassDank: Plugin loaded")
+        console.info("GopassDms: Plugin loaded")
 
         if (!pluginService)
             return
@@ -615,9 +615,9 @@ QtObject {
 
     function _showToast(message) {
         if (typeof ToastService !== "undefined")
-            ToastService.showInfo("Gopass-Dank", message)
+            ToastService.showInfo("GoPass DMS", message)
         else
-            console.log("GopassDank:", message)
+            console.log("GopassDms:", message)
     }
 
     // --- Passphrase dialog (native DMS-styled FloatingWindow) ---

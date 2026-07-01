@@ -5,11 +5,11 @@ import qs.Widgets
 
 PluginSettings {
     id: root
-    pluginId: "gopassDank"
+    pluginId: "gopassDms"
 
     StyledText {
         width: parent.width
-        text: "Gopass-Dank"
+        text: "GoPass DMS"
         font.pixelSize: Theme.fontSizeLarge
         font.weight: Font.Bold
         color: Theme.surfaceText
